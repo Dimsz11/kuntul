@@ -94,8 +94,9 @@ jobs:
         shell: bash
         run: |
           if [ ! -d android ]; then
-            echo "No android/ folder — generating platform scaffolding from pubspec.yaml"
-            flutter create --platforms=android,ios .
+            PKG=$(grep -m1 '^name:' pubspec.yaml | awk '{print $2}')
+            echo "No android/ folder — generating platform scaffolding for package '$PKG'"
+            flutter create --platforms=android,ios --project-name "$PKG" --org com.jsc .
           fi
 
       - name: Resolve dependencies
@@ -159,8 +160,9 @@ jobs:
         shell: bash
         run: |
           if [ ! -d ios ]; then
-            echo "No ios/ folder — generating platform scaffolding from pubspec.yaml"
-            flutter create --platforms=android,ios .
+            PKG=$(grep -m1 '^name:' pubspec.yaml | awk '{print $2}')
+            echo "No ios/ folder — generating platform scaffolding for package '$PKG'"
+            flutter create --platforms=android,ios --project-name "$PKG" --org com.jsc .
           fi
 
       - name: Resolve dependencies
