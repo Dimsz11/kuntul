@@ -23,20 +23,24 @@ class ApiException implements Exception {
 /// unwraps `data`; list endpoints that return a `PagedResult` expose their rows
 /// under `data.items`, which the typed methods below handle explicitly.
 class ApiClient {
-  ApiClient({required this.config, http.Client? httpClient})
+  ApiClient({required this.config, http.Client? httpClient, this.lang = 'ar'})
       : _http = httpClient ?? http.Client();
 
   final AppConfig config;
   final http.Client _http;
 
   /// Language sent as the `lang` query param (and Accept-Language header) so
-  /// the backend resolves titles/content for the active locale.
+  /// the backend resolves titles/content for the active locale. Defaults to
+  /// Arabic and is overridden by [ApiClient.fromConfig] / the [language] setter.
   String lang;
 
   /// Construct with the config's default language.
   factory ApiClient.fromConfig(AppConfig config, {http.Client? httpClient}) {
-    return ApiClient(config: config, httpClient: httpClient)
-      ..lang = config.languages.defaultLang;
+    return ApiClient(
+      config: config,
+      httpClient: httpClient,
+      lang: config.languages.defaultLang,
+    );
   }
 
   set language(String value) => lang = value;

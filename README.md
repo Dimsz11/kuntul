@@ -68,7 +68,7 @@ new section types without breaking older app builds.
 | `banner` | `banner_section.dart` | `imageUrl`, `link?` | static (from config) |
 | `publications` | `generic_list_section.dart` | `count` | `GET /api/publications?pageSize=count` |
 | `services` | `generic_list_section.dart` | — | `GET /api/companies/services` |
-| `webview` | `webview_section.dart` (embedded WebView) | `url` | `config.url` |
+| `webview` | `webview_section.dart` (card → opens `url` in external browser) | `url` | `config.url` |
 | `spacer` | `spacer_section.dart` | `height` | static gap |
 | `announcements` | `announcements_section.dart` (list) | `count` | `GET /api/announcements?pageSize=count` |
 | `gallery` | `gallery_section.dart` (cover tiles → `/gallery`) | `count` | `GET /api/gallery?pageSize=count` (albums) |
@@ -83,6 +83,13 @@ new section types without breaking older app builds.
 | `categories` | `categories_section.dart` (grid → news by category) | — | `GET /api/news/categories` |
 | `about` | `about_section.dart` (page preview → `PageScreen`) | `pageKey` | `GET /api/pages/by-key/{pageKey}` |
 
+> **Note:** `webview` sections (and the `/webview?url=` route) open the link in
+> the **external browser** via `url_launcher`. The `webview_flutter` dependency
+> was removed for build portability — its native Android plugin requires a newer
+> Kotlin than the `flutter create`-scaffolded project uses in CI. Swap in
+> `webview_flutter` (or `flutter_inappwebview`) if you need an embedded WebView
+> and can manage the Android Kotlin/Gradle toolchain.
+
 ### Content detail / list endpoints
 
 | Screen (`lib/screens/`) | Endpoint |
@@ -96,7 +103,7 @@ new section types without breaking older app builds.
 | `faq_screen.dart` | `GET /api/faq?pageSize=` (accordion) |
 | `search_screen.dart` | `GET /api/search/semantic?q=` → fallback `GET /api/news?search=` |
 | `page_screen.dart` | `GET /api/pages/by-key/{key}` |
-| `webview_screen.dart` | (renders `config.url` / `/webview?url=`) |
+| `webview_screen.dart` | (opens `config.url` / `/webview?url=` in the external browser) |
 | `placeholder_screen.dart` | (fallback for unknown routes) |
 
 Menu `route` values resolved by `lib/routing/app_router.dart`:
@@ -112,7 +119,7 @@ never dead-ends.
 
 ```
 flutter-reference/
-├── pubspec.yaml                       # deps: http, cached_network_image, url_launcher, webview_flutter, intl, flutter_localizations
+├── pubspec.yaml                       # deps: http, cached_network_image, url_launcher, intl, flutter_localizations
 ├── analysis_options.yaml
 ├── assets/config/app_config.json      # sample (JSC branding, baked menu+home); CI overwrites at build time
 ├── .github/workflows/build.yml        # COPIED VERBATIM from docs/mobile-template/build.yml

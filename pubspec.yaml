@@ -25,11 +25,10 @@ dependencies:
   # Remote image loading + disk caching for slider / news / publication art.
   cached_network_image: ^3.4.1
 
-  # Opening external links (webview "open in browser", link-target _blank, ...).
+  # Opening external links: link-target _blank, slider/banner taps, and the
+  # `webview` home section + /webview route (which open in the external
+  # browser — webview_flutter was removed for CI build portability).
   url_launcher: ^6.3.1
-
-  # Embedded WebView for the `webview` home section + /webview route.
-  webview_flutter: ^4.10.0
 
   # Date / number formatting, locale-aware (used by intl-driven widgets).
   intl: ^0.19.0

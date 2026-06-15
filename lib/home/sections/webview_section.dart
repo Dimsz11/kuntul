@@ -1,70 +1,71 @@
 import 'package:flutter/material.dart';
-import 'package:webview_flutter/webview_flutter.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../../core/models.dart';
-import '../../screens/webview_screen.dart';
 import '../../shared/section_header.dart';
 
-/// `webview` section — an embedded web page inside the home feed.
+/// `webview` section — a link to an external web page.
 ///
-/// Data source: embedded WebView of `config.url`.
-/// Config: `url`.
+/// Data source: `config.url`. Config: `url`.
 ///
-/// Embedded in a scrolling list, so it gets a fixed height and a "fullscreen"
-/// affordance that pushes the dedicated [WebViewScreen].
-class WebViewSection extends StatefulWidget {
+/// `webview_flutter` was removed for CI build portability, so instead of an
+/// inline WebView this renders a card whose button opens the URL in the
+/// external browser via `url_launcher`.
+class WebViewSection extends StatelessWidget {
   const WebViewSection({super.key, required this.section});
 
   final HomeSection section;
 
-  @override
-  State<WebViewSection> createState() => _WebViewSectionState();
-}
-
-class _WebViewSectionState extends State<WebViewSection> {
-  WebViewController? _controller;
-
-  @override
-  void initState() {
-    super.initState();
-    final url = widget.section.url;
-    if (url != null && url.isNotEmpty) {
-      final uri = Uri.tryParse(url);
-      if (uri != null) {
-        _controller = WebViewController()
-          ..setJavaScriptMode(JavaScriptMode.unrestricted)
-          ..loadRequest(uri);
-      }
+  Future<void> _open() async {
+    final url = section.url;
+    if (url == null || url.isEmpty) return;
+    final uri = Uri.tryParse(url);
+    if (uri != null && await canLaunchUrl(uri)) {
+      await launchUrl(uri, mode: LaunchMode.externalApplication);
     }
   }
 
   @override
   Widget build(BuildContext context) {
-    final url = widget.section.url;
-    final controller = _controller;
-    if (url == null || url.isEmpty || controller == null) {
-      return const SizedBox.shrink();
-    }
+    final url = section.url;
+    if (url == null || url.isEmpty) return const SizedBox.shrink();
+
+    final isRtl = Directionality.of(context) == TextDirection.rtl;
+    final scheme = Theme.of(context).colorScheme;
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        SectionHeader(
-          title: widget.section.title,
-          onSeeAll: () => Navigator.push(
-            context,
-            MaterialPageRoute(
-              builder: (_) => WebViewScreen(url: url, title: widget.section.title),
-            ),
-          ),
-        ),
+        SectionHeader(title: section.title),
         Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 12),
-          child: ClipRRect(
-            borderRadius: BorderRadius.circular(12),
-            child: SizedBox(
-              height: 280,
-              child: WebViewWidget(controller: controller),
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+          child: Card(
+            child: InkWell(
+              onTap: _open,
+              borderRadius: BorderRadius.circular(12),
+              child: Padding(
+                padding: const EdgeInsets.all(16),
+                child: Row(
+                  children: [
+                    Icon(Icons.public, color: scheme.primary),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Text(
+                        url,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: Theme.of(context).textTheme.bodyMedium,
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    FilledButton.tonalIcon(
+                      onPressed: _open,
+                      icon: const Icon(Icons.open_in_new, size: 18),
+                      label: Text(isRtl ? 'افتح الرابط' : 'Open link'),
+                    ),
+                  ],
+                ),
+              ),
             ),
           ),
         ),
