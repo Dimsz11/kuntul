@@ -1,0 +1,20 @@
+# Flutter / Dart
+.dart_tool/
+.packages
+.pub-cache/
+.pub/
+build/
+.flutter-plugins
+.flutter-plugins-dependencies
+pubspec.lock
+
+# IDE
+.idea/
+.vscode/
+*.iml
+
+# OS
+.DS_Store
+
+# NOTE: assets/config/app_config.json is intentionally committed as a dev
+# sample. The CI (build.yml) overwrites it from the CMS at build time.

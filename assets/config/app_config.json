@@ -1,0 +1,75 @@
+{
+  "version": "1.0.0",
+  "generatedAt": "2026-01-01T00:00:00Z",
+  "app": {
+    "appId": "com.jsc.app",
+    "appName": "خدمات هيئة الأوراق المالية",
+    "appNameEn": "JSC Services",
+    "bundleId": "com.jsc.app",
+    "versionName": "1.0.0",
+    "versionCode": 1
+  },
+  "api": {
+    "baseUrl": "https://REPLACE_WITH_CMS_HOST",
+    "mobileEndpoint": "/mobile",
+    "timeout": 30000
+  },
+  "branding": {
+    "primaryColor": "#2F7995",
+    "secondaryColor": "#1D586F",
+    "accentColor": "#E8A33D",
+    "themeMode": "light",
+    "logoUrl": "https://REPLACE_WITH_CMS_HOST/assets/logo.png",
+    "splashUrl": "https://REPLACE_WITH_CMS_HOST/assets/splash.png",
+    "fontFamily": "Cairo"
+  },
+  "navigation": {
+    "style": "both"
+  },
+  "modules": [
+    { "name": "home", "enabled": true, "icon": "home", "route": "/", "displayOrder": 1, "titleAr": "الرئيسية", "titleEn": "Home" },
+    { "name": "news", "enabled": true, "icon": "newspaper", "route": "/news", "displayOrder": 2, "titleAr": "الأخبار", "titleEn": "News" },
+    { "name": "publications", "enabled": true, "icon": "menu_book", "route": "/publications", "displayOrder": 3, "titleAr": "الإصدارات", "titleEn": "Publications" },
+    { "name": "gallery", "enabled": true, "icon": "gallery", "route": "/gallery", "displayOrder": 4, "titleAr": "معرض الصور", "titleEn": "Gallery" },
+    { "name": "faq", "enabled": true, "icon": "faq", "route": "/faq", "displayOrder": 5, "titleAr": "الأسئلة الشائعة", "titleEn": "FAQ" },
+    { "name": "contact", "enabled": true, "icon": "contact_mail", "route": "/contact", "displayOrder": 6, "titleAr": "اتصل بنا", "titleEn": "Contact" }
+  ],
+  "home": [
+    { "type": "slider", "title": "أبرز الأخبار", "order": 1, "config": { "linkGroupKey": "home_slider", "autoplay": true, "interval": 5 } },
+    { "type": "shortcuts", "title": "روابط سريعة", "order": 2, "config": { "moduleNames": ["news", "publications", "gallery", "contact"] } },
+    { "type": "news", "title": "آخر الأخبار", "order": 3, "config": { "count": 6 } },
+    { "type": "categories", "title": "التصنيفات", "order": 4, "config": {} },
+    { "type": "announcements", "title": "الإعلانات", "order": 5, "config": { "count": 4 } },
+    { "type": "gallery", "title": "معرض الصور", "order": 6, "config": { "count": 8 } },
+    { "type": "videos", "title": "كلمات ومرئيات", "order": 7, "config": { "count": 6 } },
+    { "type": "publications", "title": "الإصدارات", "order": 8, "config": { "count": 6 } },
+    { "type": "faq", "title": "الأسئلة الشائعة", "order": 9, "config": { "count": 4 } },
+    { "type": "about", "title": "عن الهيئة", "order": 10, "config": { "pageKey": "about" } },
+    { "type": "sociallinks", "title": "تابعنا", "order": 11, "config": { "linkGroupKey": "social_links" } },
+    { "type": "contact", "title": "تواصل معنا", "order": 12, "config": {} }
+  ],
+  "languages": {
+    "default": "ar",
+    "supported": ["ar", "en"],
+    "rtlLanguages": ["ar"]
+  },
+  "firebase": {
+    "projectId": "",
+    "senderId": "",
+    "apiKey": "",
+    "appIdAndroid": "",
+    "appIdIos": ""
+  },
+  "layout": {
+    "customLayoutJson": null
+  },
+  "features": {
+    "pushNotifications": true,
+    "darkMode": false,
+    "offlineMode": true,
+    "biometricAuth": false,
+    "analytics": false,
+    "crashReporting": false,
+    "inAppFeedback": true
+  }
+}

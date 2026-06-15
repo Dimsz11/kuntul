@@ -1,0 +1,162 @@
+# JSC CMS2026 — Mobile App CI build workflow.
+# PLACE THIS FILE AT: .github/workflows/build.yml  inside the Flutter template repo
+#   (github.com/ramiasaad-svg/cms2026-mobile-template).
+#
+# The CMS triggers it via the GitHub REST API (workflow_dispatch) sending the inputs below.
+# It injects the CMS-generated app_config.json, builds the Flutter app, and uploads the
+# artifacts so the CMS can download them (GitHubBuildService.DownloadArtifactsAsync).
+#
+# The CMS correlates the created run through `build_ref` (= AppBuild.BuildNumber), which is
+# why it must appear in run-name.
+
+name: Build Mobile App
+run-name: "Build ${{ inputs.build_ref }} — ${{ inputs.platform }} v${{ inputs.version_name }}+${{ inputs.version_code }}"
+
+on:
+  workflow_dispatch:
+    inputs:
+      app_id:
+        description: "App identifier (e.g. com.jsc.app)"
+        required: true
+        type: string
+      platform:
+        description: "android | ios | both"
+        required: true
+        default: "android"
+        type: string
+      version_name:
+        description: "Marketing version (e.g. 1.0.0)"
+        required: true
+        default: "1.0.0"
+        type: string
+      version_code:
+        description: "Build number (integer)"
+        required: true
+        default: "1"
+        type: string
+      build_ref:
+        description: "CMS build correlation ref (AppBuild.BuildNumber) — keep in run-name"
+        required: true
+        type: string
+      api_base_url:
+        description: "Backend API base URL baked into the app"
+        required: false
+        type: string
+      app_config_b64:
+        description: "base64 of the CMS-generated app_config.json"
+        required: true
+        type: string
+
+# Pin the Flutter version to match the template's pubspec environment.
+env:
+  FLUTTER_VERSION: "3.24.0"
+  FLUTTER_CHANNEL: "stable"
+
+permissions:
+  contents: read
+
+jobs:
+  android:
+    if: ${{ inputs.platform == 'android' || inputs.platform == 'both' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout template
+        uses: actions/checkout@v4
+
+      - name: Inject app_config.json
+        shell: bash
+        run: |
+          mkdir -p assets/config
+          printf '%s' "${{ inputs.app_config_b64 }}" | python3 -c "import sys,base64;sys.stdout.buffer.write(base64.b64decode(sys.stdin.read()))" > assets/config/app_config.json
+          echo "----- app_config.json -----"
+          cat assets/config/app_config.json
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: ${{ env.FLUTTER_CHANNEL }}
+          cache: true
+
+      - name: Resolve dependencies
+        run: flutter pub get
+
+      # Optional release signing: provide ANDROID_KEYSTORE_BASE64 / *_PASSWORD / *_KEY_ALIAS
+      # repo secrets to sign; without them this produces a debug-signed release APK.
+      - name: Decode Android keystore
+        if: ${{ secrets.ANDROID_KEYSTORE_BASE64 != '' }}
+        shell: bash
+        run: |
+          echo "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" | base64 -d > android/app/upload-keystore.jks
+          cat > android/key.properties <<EOF
+          storeFile=upload-keystore.jks
+          storePassword=${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          keyAlias=${{ secrets.ANDROID_KEY_ALIAS }}
+          keyPassword=${{ secrets.ANDROID_KEY_PASSWORD }}
+          EOF
+
+      - name: Build APK
+        run: flutter build apk --release --build-name="${{ inputs.version_name }}" --build-number="${{ inputs.version_code }}"
+
+      - name: Build App Bundle (AAB)
+        run: flutter build appbundle --release --build-name="${{ inputs.version_name }}" --build-number="${{ inputs.version_code }}"
+
+      - name: Upload Android artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-${{ inputs.build_ref }}
+          path: |
+            build/app/outputs/flutter-apk/app-release.apk
+            build/app/outputs/bundle/release/app-release.aab
+          if-no-files-found: error
+          retention-days: 14
+
+  ios:
+    if: ${{ inputs.platform == 'ios' || inputs.platform == 'both' }}
+    runs-on: macos-latest
+    steps:
+      - name: Checkout template
+        uses: actions/checkout@v4
+
+      - name: Inject app_config.json
+        shell: bash
+        run: |
+          mkdir -p assets/config
+          printf '%s' "${{ inputs.app_config_b64 }}" | python3 -c "import sys,base64;sys.stdout.buffer.write(base64.b64decode(sys.stdin.read()))" > assets/config/app_config.json
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: ${{ env.FLUTTER_CHANNEL }}
+          cache: true
+
+      - name: Resolve dependencies
+        run: flutter pub get
+
+      # Unsigned .app archive when no Apple signing secrets are configured.
+      # For a signed .ipa, add APPLE_CERT_P12_BASE64 / provisioning-profile secrets and
+      # replace this step with a fastlane/xcodebuild signing flow.
+      - name: Build iOS (no codesign)
+        run: flutter build ios --release --no-codesign --build-name="${{ inputs.version_name }}" --build-number="${{ inputs.version_code }}"
+
+      - name: Package unsigned IPA
+        shell: bash
+        run: |
+          mkdir -p build/ios/ipa/Payload
+          cp -r build/ios/iphoneos/Runner.app build/ios/ipa/Payload/
+          cd build/ios/ipa && zip -qr "app-release.ipa" Payload && rm -rf Payload
+
+      - name: Upload iOS artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-${{ inputs.build_ref }}
+          path: build/ios/ipa/app-release.ipa
+          if-no-files-found: error
+          retention-days: 14
