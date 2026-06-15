@@ -88,6 +88,16 @@ jobs:
           channel: ${{ env.FLUTTER_CHANNEL }}
           cache: true
 
+      # Minimal/reference repos ship only lib/+pubspec (no android/ios). Generate the
+      # platform folders from pubspec when missing; a complete design keeps its own.
+      - name: Ensure platform scaffolding
+        shell: bash
+        run: |
+          if [ ! -d android ]; then
+            echo "No android/ folder — generating platform scaffolding from pubspec.yaml"
+            flutter create --platforms=android,ios .
+          fi
+
       - name: Resolve dependencies
         run: flutter pub get
 
@@ -144,6 +154,14 @@ jobs:
           flutter-version: ${{ env.FLUTTER_VERSION }}
           channel: ${{ env.FLUTTER_CHANNEL }}
           cache: true
+
+      - name: Ensure platform scaffolding
+        shell: bash
+        run: |
+          if [ ! -d ios ]; then
+            echo "No ios/ folder — generating platform scaffolding from pubspec.yaml"
+            flutter create --platforms=android,ios .
+          fi
 
       - name: Resolve dependencies
         run: flutter pub get
