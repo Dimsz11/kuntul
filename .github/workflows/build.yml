@@ -51,6 +51,7 @@ on:
 env:
   FLUTTER_VERSION: "3.24.0"
   FLUTTER_CHANNEL: "stable"
+  KOTLIN_VERSION: "1.9.24"
 
 permissions:
   contents: read
@@ -97,6 +98,11 @@ jobs:
             PKG=$(grep -m1 '^name:' pubspec.yaml | awk '{print $2}')
             echo "No android/ folder — generating platform scaffolding for package '$PKG'"
             flutter create --platforms=android,ios --project-name "$PKG" --org com.jsc .
+            # The generated Android project may pin an old Kotlin (1.7.x) incompatible with
+            # modern AndroidX/plugin deps (compiled with Kotlin 1.9). Bump it.
+            sed -i -E "s/(id ['\"]org\.jetbrains\.kotlin\.android['\"] version ['\"])[0-9.]+(['\"])/\1${KOTLIN_VERSION}\2/" android/settings.gradle 2>/dev/null || true
+            sed -i -E "s/(ext\.kotlin_version = ['\"])[0-9.]+(['\"])/\1${KOTLIN_VERSION}\2/" android/build.gradle 2>/dev/null || true
+            echo "Kotlin pin after patch:"; grep -RinE "kotlin.android.* version|kotlin_version" android/settings.gradle android/build.gradle 2>/dev/null || true
           fi
 
       - name: Resolve dependencies
