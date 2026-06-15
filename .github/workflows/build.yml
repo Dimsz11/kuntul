@@ -52,6 +52,9 @@ env:
   FLUTTER_VERSION: "3.24.0"
   FLUTTER_CHANNEL: "stable"
   KOTLIN_VERSION: "1.9.24"
+  # Run the JS actions on Node 24 (checkout/setup-java/upload-artifact ship on the
+  # deprecated Node 20 runtime); silences the deprecation warning + future-proofs.
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 
 permissions:
   contents: read
