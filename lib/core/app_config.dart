@@ -48,6 +48,8 @@ class AppConfig {
     required this.bakedHome,
     required this.features,
     required this.firebase,
+    this.designTokens,
+    this.designTokensDark,
   });
 
   final String appName;
@@ -73,6 +75,17 @@ class AppConfig {
 
   final Map<String, bool> features;
   final FirebaseConfig firebase;
+
+  /// Design System tokens (Phase 4c) baked into `app_config.json` under `designTokens`
+  /// (schema `cms2026.flutter-tokens/1`). The RICHER styling source — when present, [AppTheme]
+  /// builds [ThemeData] from it; otherwise it falls back to [branding]. Null when the config predates
+  /// the Design System (older backend) so old apps keep their branding-driven look. See [AppTheme].
+  final DesignTokensConfig? designTokens;
+
+  /// Optional second token set for the OPPOSITE brightness, when the backend bakes both light + dark
+  /// (e.g. under `designTokensDark`). When present, [AppTheme] uses each for its matching brightness;
+  /// when absent, the single [designTokens] set drives both (its own brightness exact, the other derived).
+  final DesignTokensConfig? designTokensDark;
 
   /// Resolve the app title for [langCode] (falls back to the Arabic name).
   String titleFor(String langCode) =>
@@ -140,6 +153,10 @@ class AppConfig {
       bakedHome: bakedHome,
       features: _boolMap(json['features']),
       firebase: FirebaseConfig.fromJson(_map(json['firebase'])),
+      // Design System tokens (Phase 4c). Present only when the backend baked them; null-safe otherwise so
+      // an older config still parses and the app falls back to branding.
+      designTokens: DesignTokensConfig.tryParse(json['designTokens']),
+      designTokensDark: DesignTokensConfig.tryParse(json['designTokensDark']),
     );
   }
 
@@ -307,10 +324,169 @@ class FirebaseConfig {
       );
 }
 
+// ════════════════════════════════════════════════════════════════════════════
+// DESIGN SYSTEM TOKENS (Phase 4c) — typed view over app_config.json `designTokens`.
+//
+// Mirrors the backend Flutter token JSON (schema `cms2026.flutter-tokens/1`, produced by
+// DesignTokenResolver.ToFlutter and embedded by AppConfigBuilder): semantic colors as hex, a type scale,
+// numeric spacing/radius, motion, and the `useMaterial3` flag. Pure data holder — no `dart:ui` import here;
+// hex→Color conversion + ThemeData construction live in `theme/app_theme.dart` (AppTheme.fromTokens).
+//
+// Everything is null-safe: a missing/partial token block yields nulls and the theme layer falls back per
+// field, so a half-authored theme never crashes theme construction.
+// ════════════════════════════════════════════════════════════════════════════
+class DesignTokensConfig {
+  const DesignTokensConfig({
+    required this.schema,
+    required this.mode,
+    required this.platform,
+    required this.useMaterial3,
+    required this.rtlAware,
+    required this.fontFamilyBase,
+    required this.fontFamilyHeading,
+    required this.colors,
+    required this.typeScale,
+    required this.spacing,
+    required this.radius,
+    required this.motionDurationMs,
+  });
+
+  /// e.g. "cms2026.flutter-tokens/1".
+  final String schema;
+
+  /// The brightness this token set was resolved for: "light" | "dark" | "highContrast".
+  final String mode;
+
+  /// "material" | "cupertino".
+  final String platform;
+
+  final bool useMaterial3;
+  final bool rtlAware;
+
+  /// Base/heading font families (null/empty → platform default).
+  final String? fontFamilyBase;
+  final String? fontFamilyHeading;
+
+  /// Semantic role → hex string ("primary","onPrimary","secondary","surface","onSurface","background",
+  /// "onBackground","error","onError","outline",…). The theme layer parses hex → Color with fallbacks.
+  final Map<String, String> colors;
+
+  /// Type-scale role → metrics ("display","h1","h2","title","body","label","caption").
+  final Map<String, TypeScaleToken> typeScale;
+
+  /// Spacing scale (px), e.g. {"xs":4,"sm":8,"md":16,…}.
+  final Map<String, double> spacing;
+
+  /// Radius scale (px), e.g. {"none":0,"sm":4,"md":8,"lg":12,"pill":999}.
+  final Map<String, double> radius;
+
+  /// Motion durations (ms), e.g. {"fast":150,"base":250,"slow":400}.
+  final Map<String, double> motionDurationMs;
+
+  /// True for a dark token set (drives the [Brightness] the theme layer builds).
+  bool get isDark => mode.toLowerCase() == 'dark';
+
+  /// Convenience: a named color, or null when absent/blank.
+  String? color(String role) {
+    final v = colors[role];
+    return (v != null && v.isNotEmpty) ? v : null;
+  }
+
+  /// A radius value (px) by key, or [fallback].
+  double radiusOf(String key, double fallback) => radius[key] ?? fallback;
+
+  /// Parse a `designTokens` JSON node, or null when absent / not an object / missing the schema marker.
+  static DesignTokensConfig? tryParse(dynamic node) {
+    if (node is! Map) return null;
+    final json = node.map((k, v) => MapEntry(k.toString(), v));
+
+    final schema = _str(json['schema'], '');
+    // Be tolerant: accept any cms2026 flutter-tokens schema; bail only if there's clearly no token data.
+    final colorsRaw = _map(json['colors']);
+    if (schema.isEmpty && colorsRaw.isEmpty) return null;
+
+    final colors = <String, String>{};
+    colorsRaw.forEach((k, v) {
+      if (v is String && v.isNotEmpty) colors[k] = v;
+    });
+
+    final typeScale = <String, TypeScaleToken>{};
+    _map(json['typography']).forEach((k, v) {
+      if (v is Map) typeScale[k] = TypeScaleToken.fromJson(v.map((kk, vv) => MapEntry(kk.toString(), vv)));
+    });
+
+    return DesignTokensConfig(
+      schema: schema.isEmpty ? 'cms2026.flutter-tokens/1' : schema,
+      mode: _str(json['mode'], 'light'),
+      platform: _str(json['platform'], 'material'),
+      useMaterial3: _bool(json['useMaterial3'], true),
+      rtlAware: _bool(json['rtlAware'], true),
+      fontFamilyBase: _optStr(_map(json['fontFamily'])['base']),
+      fontFamilyHeading: _optStr(_map(json['fontFamily'])['heading']),
+      colors: colors,
+      typeScale: typeScale,
+      spacing: _numMap(json['spacing']),
+      radius: _numMap(json['radius']),
+      motionDurationMs: _numMap(_map(json['motion'])['duration']),
+    );
+  }
+}
+
+/// One type-scale role's metrics (logical px / 100..900 weight / unitless height). All nullable so a
+/// partial scale degrades gracefully (the theme layer supplies Material defaults for anything missing).
+class TypeScaleToken {
+  const TypeScaleToken({this.size, this.weight, this.height, this.letterSpacing});
+
+  final double? size;
+  final int? weight;
+  final double? height;
+  final double? letterSpacing;
+
+  factory TypeScaleToken.fromJson(Map<String, dynamic> json) => TypeScaleToken(
+        size: _optNum(json['size']),
+        weight: _optInt(json['weight']),
+        height: _optNum(json['height']),
+        letterSpacing: _optNum(json['letterSpacing']),
+      );
+}
+
 // --- small null-safe coercion helpers (kept private to this file) ---
 
 String _str(dynamic v, String fallback) =>
     v is String && v.isNotEmpty ? v : fallback;
+
+/// Optional trimmed string (null when absent/blank).
+String? _optStr(dynamic v) {
+  if (v is String && v.trim().isNotEmpty) return v.trim();
+  return null;
+}
+
+/// Optional double (null when not numeric).
+double? _optNum(dynamic v) {
+  if (v is num) return v.toDouble();
+  if (v is String) return double.tryParse(v);
+  return null;
+}
+
+/// Optional int (null when not numeric).
+int? _optInt(dynamic v) {
+  if (v is int) return v;
+  if (v is num) return v.toInt();
+  if (v is String) return int.tryParse(v);
+  return null;
+}
+
+/// A { key → double } map from a JSON object (non-numeric values skipped).
+Map<String, double> _numMap(dynamic v) {
+  final out = <String, double>{};
+  if (v is Map) {
+    v.forEach((k, val) {
+      final n = _optNum(val);
+      if (n != null) out[k.toString()] = n;
+    });
+  }
+  return out;
+}
 
 /// First non-empty string among [candidates], else [fallback].
 String _firstStr(List<dynamic> candidates, String fallback) {

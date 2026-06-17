@@ -51,7 +51,8 @@ class _CmsAppState extends State<CmsApp> {
 
   @override
   Widget build(BuildContext context) {
-    final theme = AppTheme(widget.config.branding);
+    // Phase 4c: build the theme from the baked Design System tokens when present (falls back to branding).
+    final theme = AppTheme.fromConfig(widget.config);
     final isRtl = widget.config.languages.isRtl(_lang);
 
     return AppScope(
