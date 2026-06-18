@@ -4,6 +4,12 @@ description: >-
   home-page sections and branding are all controlled by the webmaster from the
   CMS2026 admin (Mobile App Builder) and rendered at runtime from the documented
   mobile contract (GET /api/mobile/menu, GET /api/mobile/home-layout, ...).
+  Phase 6f adds the Enterprise Runtime wiring: runtime config envelope (feature
+  flags / remote config / experiments / remote theme), device + push
+  registration, deep links, offline cache + delta sync + offline form queue +
+  favorites, analytics event queue + session/screen tracking, and secure
+  token storage + optional biometric unlock — all server-controlled and all
+  degrading gracefully when the new endpoints / Firebase / biometric are absent.
 publish_to: "none"
 version: 1.0.0+1
 
@@ -18,20 +24,59 @@ dependencies:
   flutter_localizations:
     sdk: flutter
 
-  # HTTP client used by ApiClient. `http` is sufficient for the read-only
-  # contract; swap for `dio` if you need interceptors / retries.
+  # HTTP client used by ApiClient. `http` is sufficient for the contract; the
+  # Phase-6f runtime services layer interceptors (auth header, cert-pinning
+  # hook, request-signing seam) over a pluggable `http.Client` factory instead
+  # of pulling in Dio — keeps the verified-green CI toolchain unchanged.
   http: ^1.2.2
 
   # Remote image loading + disk caching for slider / news / publication art.
   cached_network_image: ^3.4.1
 
-  # Opening external links: link-target _blank, slider/banner taps, and the
-  # `webview` home section + /webview route (which open in the external
-  # browser — webview_flutter was removed for CI build portability).
+  # Opening external links: link-target _blank, slider/banner taps, the
+  # `webview` home section + /webview route, push/deeplink web fallbacks
+  # (which open in the external browser — webview_flutter was removed for CI
+  # build portability).
   url_launcher: ^6.3.1
 
   # Date / number formatting, locale-aware (used by intl-driven widgets).
   intl: ^0.19.0
+
+  # ── Phase 6f — Enterprise Runtime wiring ────────────────────────────────────
+  # All pinned to releases compatible with Dart 3.5 / Flutter 3.24 (build.yml).
+  # Each is consumed behind a null/absent-safe service so the app still builds
+  # and runs when the corresponding capability is unavailable at runtime.
+
+  # Universal / App Links + custom-scheme deep links (DeepLinkService). Pure
+  # method-channel plugin; no extra native config needed to COMPILE — the
+  # AASA / intent-filter host config is documented in the README (and added by
+  # `flutter create` scaffolding when the platform folders are generated).
+  app_links: ^6.3.2
+
+  # Online/offline detection for the sync + analytics flush triggers.
+  connectivity_plus: ^6.0.5
+
+  # Offline cache + sync cursor + offline-form queue + favorites mirror. Pure
+  # Dart (no native code, no build_runner/codegen here — raw dynamic boxes),
+  # so it does not perturb the Android Kotlin/Gradle scaffold.
+  hive: ^2.2.3
+  hive_flutter: ^1.1.0
+
+  # Secure token storage (auth_service). Uses Keychain / EncryptedSharedPrefs.
+  flutter_secure_storage: ^9.2.2
+
+  # Optional biometric unlock, gated by config.session.biometric. Falls back to
+  # no-op when the device has no biometrics enrolled.
+  local_auth: ^2.3.0
+
+  # NOTE — Push / FCM is intentionally NOT a hard dependency. Firebase
+  # Messaging needs native config (google-services.json /
+  # GoogleService-Info.plist) that the CI does NOT provide, and the
+  # google-services Gradle plugin FAILS the build when that file is absent.
+  # PushService therefore talks to a pluggable `PushProvider` whose default is
+  # a safe no-op; to enable real push, add `firebase_core` + `firebase_messaging`
+  # here and a `FirebasePushProvider` (see core/services/push_service.dart),
+  # then drop in the Firebase config files. See README "Enabling Push".
 
 dev_dependencies:
   flutter_lints: ^4.0.0

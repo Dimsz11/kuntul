@@ -37,6 +37,7 @@ class AppConfig {
     required this.appName,
     required this.appNameEn,
     required this.appId,
+    this.buildConfigId,
     required this.versionName,
     required this.versionCode,
     required this.api,
@@ -55,6 +56,15 @@ class AppConfig {
   final String appName;
   final String appNameEn;
   final String appId;
+
+  /// Optional NUMERIC `MobileBuildConfig.Id` if the backend ever bakes it
+  /// (`app.buildConfigId`). The Phase-6f runtime/sync/analytics endpoints take
+  /// `appId` as an int to scope per-app rows; when this is null the app simply
+  /// omits the param and the server resolves the GLOBAL defaults (fully
+  /// graceful — see RuntimeService). The string [appId] (bundle id) is what the
+  /// `/api/mobile/*` endpoints use via `?app=`.
+  final int? buildConfigId;
+
   final String versionName;
   final int versionCode;
   final ApiConfig api;
@@ -139,6 +149,10 @@ class AppConfig {
       appName: appName,
       appNameEn: appNameEn,
       appId: _firstStr([app['appId'], json['appId']], 'com.cms2026.app'),
+      // Optional numeric build-config id (only present if a future backend
+      // bakes it under `app.buildConfigId`); null-safe → omitted from per-app
+      // runtime queries when absent.
+      buildConfigId: _optInt(app['buildConfigId'] ?? json['buildConfigId']),
       versionName:
           _firstStr([app['versionName'], json['versionName']], '1.0.0'),
       versionCode: _int(app['versionCode'] ?? json['versionCode'], 1),

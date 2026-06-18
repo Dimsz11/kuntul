@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../core/app_config.dart';
+import '../core/runtime/runtime_models.dart';
 
 /// Builds [ThemeData] for the app.
 ///
@@ -23,15 +24,38 @@ class AppTheme {
   /// Branding-only constructor (back-compat). Used when no Design System tokens are available.
   const AppTheme(this.branding)
       : tokens = null,
-        tokensDark = null;
+        tokensDark = null,
+        runtimeMode = null;
 
   /// Token-aware constructor — prefers [tokens]/[tokensDark]; [branding] remains the fallback per field.
   const AppTheme.fromConfig(AppConfig config)
       : branding = config.branding,
         tokens = config.designTokens,
-        tokensDark = config.designTokensDark;
+        tokensDark = config.designTokensDark,
+        runtimeMode = null;
+
+  /// PHASE 6f — runtime-aware constructor. Identical to [AppTheme.fromConfig]
+  /// except a non-null runtime [RuntimeTheme.mode] OVERRIDES the active
+  /// [ThemeMode] (remote theme switching with no rebuild). The baked token sets
+  /// still supply the *palette* for each brightness; the runtime envelope just
+  /// chooses which brightness is active.
+  ///
+  /// NOTE — full remote theme switching also lets the server pick a different
+  /// `themeId`/`brandId`. This reference only carries its own baked token sets,
+  /// so it honours `mode` here; to switch the whole palette by id, fetch that
+  /// theme's tokens from the existing `/api/brands` / theme endpoints using
+  /// [RuntimeTheme.themeId] and feed them in as [tokens]. Documented in README.
+  AppTheme.fromConfigWithRuntime(AppConfig config, RuntimeTheme? runtime)
+      : branding = config.branding,
+        tokens = config.designTokens,
+        tokensDark = config.designTokensDark,
+        runtimeMode = runtime?.mode;
 
   final BrandingConfig branding;
+
+  /// Optional runtime theme-mode override ("light" | "dark" | "highContrast").
+  /// Null → use the branding-driven [themeMode].
+  final String? runtimeMode;
 
   /// Primary Design System token set (its own brightness). Null → branding-driven theme.
   final DesignTokensConfig? tokens;
@@ -44,11 +68,18 @@ class AppTheme {
   Color get _brandSecondary => parseHex(branding.secondaryColor, fallback: const Color(0xFF1D586F));
   Color get _brandAccent => parseHex(branding.accentColor, fallback: const Color(0xFFE8A33D));
 
-  /// "light" | "dark" | "system" → Flutter [ThemeMode]. Driven by branding (the webmaster's app-level
-  /// choice); the token sets supply the *palette* for each brightness, not which mode is active.
+  /// "light" | "dark" | "system" → Flutter [ThemeMode]. A non-null runtime
+  /// [runtimeMode] (Phase 6f remote theme switching) WINS over the branding
+  /// choice; otherwise driven by branding (the webmaster's app-level choice).
+  /// The token sets supply the *palette* for each brightness, not which mode is
+  /// active.
   ThemeMode get themeMode {
-    switch (branding.themeMode.toLowerCase()) {
+    final effective = (runtimeMode != null && runtimeMode!.isNotEmpty)
+        ? runtimeMode!.toLowerCase()
+        : branding.themeMode.toLowerCase();
+    switch (effective) {
       case 'dark':
+      case 'highcontrast': // map highContrast to dark in this reference palette
         return ThemeMode.dark;
       case 'system':
         return ThemeMode.system;

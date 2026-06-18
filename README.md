@@ -11,6 +11,17 @@ the CMS at runtime so a webmaster's choices in **Admin → Mobile App Builder**
 > Flutter SDK in the authoring environment. Run `flutter pub get` + `flutter
 > analyze` before shipping; pin package versions to your toolchain.
 
+> **Phase 6f — Enterprise Runtime wiring (added).** The app is now fully
+> **CMS-driven at runtime**: it pulls feature flags / remote config / A/B
+> experiments / a resolved theme from `GET /api/runtime/config` (ETag + 304),
+> registers the device + FCM token, handles push taps → deep links, routes
+> Universal/App Links, caches content with delta sync + an offline form queue +
+> server-synced favorites, and emits an analytics event stream with session +
+> screen tracking — all server-controlled, **no rebuild**. Everything degrades
+> gracefully when the new endpoints / Firebase / biometrics are absent (the app
+> still boots + runs exactly as the pre-6f read-only reference). See
+> **§ Runtime wiring (Phase 6f)** below and `docs/mobile-template/flutter-runtime-wiring.md`.
+
 ---
 
 ## How it becomes "CMS-driven"
@@ -119,18 +130,29 @@ never dead-ends.
 
 ```
 flutter-reference/
-├── pubspec.yaml                       # deps: http, cached_network_image, url_launcher, intl, flutter_localizations
+├── pubspec.yaml                       # deps: http, cached_network_image, url_launcher, intl + (6f) app_links,
+│                                      #   connectivity_plus, hive/hive_flutter, flutter_secure_storage, local_auth
 ├── analysis_options.yaml
 ├── assets/config/app_config.json      # sample (JSC branding, baked menu+home); CI overwrites at build time
 ├── .github/workflows/build.yml        # COPIED VERBATIM from docs/mobile-template/build.yml
 └── lib/
-    ├── main.dart                      # load config → MaterialApp (theme/locale/Directionality) → MainScaffold
+    ├── main.dart                      # load config → RuntimeBootstrap.start() → MaterialApp (theme/locale/observers) → MainScaffold
     ├── core/
     │   ├── app_config.dart            # typed config model (nested `app`/baked `modules`/`home`/`navigation.style`) + AppConfig.load()
-    │   ├── api_client.dart            # envelope-unwrapping client; per-app (?app=) menu/home + all section endpoints
-    │   └── models.dart                # MenuItem, HomeSection, NewsItem, LinkItem, Publication, ServiceItem, PageContent,
-    │                                  #   AnnouncementItem, AlbumItem, SpeechItem, FaqItem, CategoryItem, SearchResultItem
-    ├── theme/app_theme.dart           # ThemeData from branding colors + fontFamily + themeMode
+    │   ├── api_client.dart            # envelope-unwrapping client; +raw GET/POST (304/401 seams), bearer/device headers, security hooks
+    │   ├── models.dart                # MenuItem, HomeSection, NewsItem, LinkItem, Publication, ServiceItem, PageContent, …
+    │   ├── runtime/runtime_models.dart # RuntimeContext + RuntimeConfig envelope (flags/config/experiments/theme/etag)
+    │   ├── storage/cache_service.dart  # Hive kv/collections/formQueue/favorites (in-memory fallback)
+    │   └── services/                   # Phase-6f runtime services + the bootstrap composition root
+    │       ├── runtime_bootstrap.dart  #   ordered wiring: config→flags/theme→device→push→deeplinks→sync+analytics
+    │       ├── runtime_service.dart     #   GET /api/runtime/config (ETag/304) + typed flag/config/experiment/theme accessors
+    │       ├── device_service.dart      #   POST /api/devices/{register,heartbeat,topics}
+    │       ├── push_service.dart        #   pluggable PushProvider (no-op default) → tap → deeplink + click
+    │       ├── deeplink_service.dart    #   app_links → /api/deeplink/resolve → Navigator.pushNamed
+    │       ├── sync_service.dart        #   /api/sync/{manifest,delta,downloads,favorites,forms/submit}
+    │       ├── analytics_service.dart   #   POST /api/analytics/events queue+flush + session/screen NavigatorObserver
+    │       └── auth_service.dart        #   secure token storage + device id + 401-refresh + biometric (local_auth)
+    ├── theme/app_theme.dart           # ThemeData from tokens/branding; `fromConfigWithRuntime` applies runtime theme.mode
     ├── nav/
     │   ├── main_scaffold.dart         # app shell: navigation.style switch (drawer|bottomnav|both), baked-first + OTA refresh
     │   └── app_drawer.dart            # drawer from menu; icon-name → IconData; language switcher
@@ -191,6 +213,69 @@ Keep `pubspec.yaml`'s `environment.flutter` in sync with `build.yml`'s
 
 ---
 
+## Runtime wiring (Phase 6f)
+
+The on-device consumption side of the Enterprise Mobile Runtime (the backend
+planes are Phase 6a–6e). All services live in `lib/core/services/` and are
+composed by `RuntimeBootstrap` (`runtime_bootstrap.dart`), wired into
+`main.dart` in this order: **config → runtime flags/theme → device register →
+push → deep links → sync + analytics**. Each step is independently guarded so a
+missing capability never blocks startup.
+
+| Service (`lib/core/services/`) | Consumes (CMS endpoint) | What it does |
+|---|---|---|
+| `runtime_service.dart` | `GET /api/runtime/config` (ETag + `If-None-Match` → 304) | Builds the `RuntimeContext` { deviceId, platform, appVersion, locale, uid, role, campaign, segments }, fetches the envelope, caches it (offline-safe), exposes `flagBool` / `configX` / `experimentVariant` / `theme`. Gates UI + applies the theme mode. |
+| `device_service.dart` | `POST /api/devices/{register,/{id}/heartbeat,/{id}/topics}` | Upserts the device (token optional), periodic heartbeat, topic sync. |
+| `push_service.dart` | `POST /api/push/track/click` (+ FCM) | Pluggable `PushProvider` (default **no-op** → builds with no Firebase). Foreground / background / terminated handlers → notification tap parses its deep link → navigates (same path as #deeplinks) + reports the click. |
+| `deeplink_service.dart` | `GET /api/deeplink/resolve` (+ `app_links`) | Universal/App Links + custom-scheme → in-app route (path map, else server resolve) → `Navigator.pushNamed` (the named routes `app_router.dart` already resolves). |
+| `cache_service.dart` + `sync_service.dart` | `GET /api/sync/{manifest,delta,downloads,favorites}` · `POST /api/sync/{forms/submit,favorites}` | Manifest → precache to Hive; delta sync with a persisted cursor (upserts + tombstones); idempotent **offline form queue** (`clientSubmissionId`, flush on reconnect); **favorites** mirror (LWW). `connectivity_plus` triggers flush on reconnect. |
+| `analytics_service.dart` | `POST /api/analytics/events` | Local event queue → **batch flush** (`{ events:[…], appId, platform, appVersion }`), honouring consent + `flags.analytics.enabled` + `config.analytics.sampleRate`. Auto session (`session_start`/`session_end` + `sessionId`) + `screen_view` via a `NavigatorObserver`; helpers for click/search/download/form_submit carrying the current experiment assignments. |
+| `auth_service.dart` | (token endpoints — 6g) | Stable device id + secure token storage (`flutter_secure_storage`), token-refresh-on-401 seam, optional biometric unlock (`local_auth`) gated by `config.session.biometric`. |
+
+The shared `ApiClient` (`api_client.dart`) carries the bearer token + device id,
+exposes raw `getRaw`/`postJsonRaw` (with the 304 + 401-retry seams), and holds
+two **security hooks** (`ApiSecurityHooks`): a request-signing seam and a
+cert-pinning client factory — both no-ops until **6g** supplies keys.
+
+### Native config for deep links (Universal / App Links)
+
+`app_links` receives the link, but the OS only delivers Universal/App Links when
+the native association is in place. The backend already serves the association
+files (`WellKnownController`): `/.well-known/apple-app-site-association` and
+`/.well-known/assetlinks.json` (from `config.deeplink.*`). The app side needs:
+
+- **iOS (Universal Links)** — add the Associated Domains entitlement
+  `applinks:YOUR_DOMAIN` in `ios/Runner/Runner.entitlements` + enable the
+  capability in Xcode. Host the AASA at `https://YOUR_DOMAIN/.well-known/apple-app-site-association`
+  (the CMS serves it with `Content-Type: application/json`, no extension).
+- **Android (App Links)** — add an `intent-filter` with
+  `android:autoVerify="true"` for `https://YOUR_DOMAIN` (+ your custom scheme)
+  to the launcher activity in `android/app/src/main/AndroidManifest.xml`, and
+  host `https://YOUR_DOMAIN/.well-known/assetlinks.json` with the release
+  keystore's SHA-256 fingerprint (set `config.deeplink.androidSha256`).
+- **Custom scheme** (fallback / dev) — register a scheme (e.g. `jscapp://`) in
+  the same manifest/Info.plist; `routeForUri` handles `scheme://news/15` too.
+
+> The CI `build.yml` scaffolds `android/` + `ios/` from `pubspec.yaml` via
+> `flutter create` when they're absent — that generates the base manifest /
+> Info.plist with the app links plugin entries; add the domain-specific
+> entitlement + intent-filter above for production verification.
+
+### Enabling Push (Firebase)
+
+Push ships **disabled** (the default `NoOpPushProvider`) so the app builds with
+no Firebase config — the CI build stays green. To enable it:
+
+1. Add `firebase_core` + `firebase_messaging` to `pubspec.yaml` and drop in
+   `google-services.json` (Android) / `GoogleService-Info.plist` (iOS).
+2. Implement a `FirebasePushProvider implements PushProvider` mapping FCM's
+   `getToken()` / `onTokenRefresh` / `onMessage` / `onMessageOpenedApp` /
+   `getInitialMessage()` to the `PushMessage` shape (read `deepLink` +
+   `campaignId` from `message.data`).
+3. Pass it to `RuntimeBootstrap(pushProvider: FirebasePushProvider())` in
+   `main.dart`. Nothing else changes — registration, topic sync, tap→deeplink
+   and click reporting are already wired.
+
 ## Notes / honest limitations
 
 - **Not compiled here.** Idiomatic and contract-accurate, but run `flutter pub
@@ -203,11 +288,12 @@ Keep `pubspec.yaml`'s `environment.flutter` in sync with `build.yml`'s
   Core default serialization, no `JsonStringEnumConverter`). They aren't needed
   for rendering, so models ignore them; parse defensively if you start using
   them.
-- **Push / Firebase / biometric auth / offline cache** are surfaced as
-  `features` flags in the baked config (`pushNotifications`, `darkMode`,
-  `offlineMode`, `biometricAuth`, `analytics`, `crashReporting`, `inAppFeedback`)
-  but are out of scope for this read-only reference (the full template in
-  CLAUDE.md describes those services). Wire them per your needs.
+- **Push / Firebase / biometric auth / offline cache / analytics** are now
+  **wired** (Phase 6f — see the section below), gated by both the baked
+  `features` flags (`pushNotifications`, `offlineMode`, `biometricAuth`,
+  `analytics`, …) AND the runtime envelope's flags. Push is behind a pluggable
+  provider whose default is a no-op (so the app builds with NO Firebase); add
+  `firebase_messaging` + a `FirebasePushProvider` to light it up.
 - **`contact` info** is read from `GET /api/settings/public` (a flat Key→Value
   map). The exact setting keys vary per install — the section probes several
   common keys (`phone`/`contactPhone`, `email`/`contactEmail`,

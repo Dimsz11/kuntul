@@ -15,6 +15,37 @@ class ApiException implements Exception {
   String toString() => 'ApiException($statusCode): $message';
 }
 
+/// A raw, un-unwrapped HTTP outcome (status + decoded body + ETag) for callers
+/// that need conditional-GET semantics (e.g. the runtime config 304 path).
+class RawResponse {
+  const RawResponse(this.statusCode, this.body, {this.etag});
+  final int statusCode;
+  final dynamic body; // decoded JSON (Map/List) or null
+  final String? etag;
+
+  bool get isNotModified => statusCode == 304;
+  bool get isOk => statusCode >= 200 && statusCode < 300;
+}
+
+/// Phase 6f — security hooks the host can install on the shared client. Both
+/// default to no-ops so the app is unchanged until 6g wires real keys.
+///
+///   • [signRequest] — a request-signing seam (HMAC/JWS of method+path+body).
+///     6g supplies the signer; here it just returns no extra headers.
+///   • [certPinningClientFactory] — returns the `http.Client` to use. The
+///     default returns a plain client; 6g can return a pinned `IOClient`
+///     (SecurityContext with the leaf/intermediate SPKI) WITHOUT touching any
+///     call site. Kept as a hook so cert-pinning lands behind config later.
+class ApiSecurityHooks {
+  const ApiSecurityHooks({this.signRequest, this.certPinningClientFactory});
+
+  /// Returns extra headers to attach (e.g. `X-Signature`). Null/empty → none.
+  final Map<String, String> Function(String method, Uri uri, String? body)? signRequest;
+
+  /// Returns the http.Client to use for all calls. Null → a default client.
+  final http.Client Function()? certPinningClientFactory;
+}
+
 /// Thin client over the CMS2026 public API.
 ///
 /// Every endpoint returns the unified envelope
@@ -23,27 +54,68 @@ class ApiException implements Exception {
 /// unwraps `data`; list endpoints that return a `PagedResult` expose their rows
 /// under `data.items`, which the typed methods below handle explicitly.
 class ApiClient {
-  ApiClient({required this.config, http.Client? httpClient, this.lang = 'ar'})
-      : _http = httpClient ?? http.Client();
+  ApiClient({
+    required this.config,
+    http.Client? httpClient,
+    this.lang = 'ar',
+    this.security = const ApiSecurityHooks(),
+  }) : _http = httpClient ?? security.certPinningClientFactory?.call() ?? http.Client();
 
   final AppConfig config;
   final http.Client _http;
+
+  /// Phase 6f — installed security hooks (signing + cert-pinning). Defaults to
+  /// no-ops, so behaviour is unchanged until 6g supplies real implementations.
+  final ApiSecurityHooks security;
 
   /// Language sent as the `lang` query param (and Accept-Language header) so
   /// the backend resolves titles/content for the active locale. Defaults to
   /// Arabic and is overridden by [ApiClient.fromConfig] / the [language] setter.
   String lang;
 
+  /// Phase 6f — the current bearer token (set by AuthService after login /
+  /// refresh; null when anonymous). Attached as `Authorization: Bearer …` on
+  /// every call. Kept here so the single shared client carries it everywhere.
+  String? authToken;
+
+  /// Phase 6f — the stable device id, attached as `X-Device-Id` (lets the
+  /// anonymous analytics/runtime/sync endpoints attribute thin requests).
+  String? deviceId;
+
+  /// Phase 6f — a 401 handler (set by AuthService). Returns true when a token
+  /// refresh succeeded so the call can be retried once. Null → no retry (the
+  /// app is anonymous; a 401 just surfaces). Guarded against re-entrancy.
+  Future<bool> Function()? onUnauthorized;
+  bool _refreshing = false;
+
   /// Construct with the config's default language.
-  factory ApiClient.fromConfig(AppConfig config, {http.Client? httpClient}) {
+  factory ApiClient.fromConfig(
+    AppConfig config, {
+    http.Client? httpClient,
+    ApiSecurityHooks security = const ApiSecurityHooks(),
+  }) {
     return ApiClient(
       config: config,
       httpClient: httpClient,
       lang: config.languages.defaultLang,
+      security: security,
     );
   }
 
   set language(String value) => lang = value;
+
+  /// Common headers for every request: JSON + the active language + (when set)
+  /// the bearer token, the device id, and the platform/version (the
+  /// analytics/runtime ingestors read `X-Platform` / `X-App-Version`).
+  Map<String, String> _headers({Map<String, String>? extra}) => {
+        'Accept': 'application/json',
+        'Accept-Language': lang,
+        'X-Lang': lang,
+        if (authToken != null && authToken!.isNotEmpty) 'Authorization': 'Bearer $authToken',
+        if (deviceId != null && deviceId!.isNotEmpty) 'X-Device-Id': deviceId!,
+        'X-App-Version': config.versionName,
+        if (extra != null) ...extra,
+      };
 
   String get _base => config.api.baseUrl;
 
@@ -64,15 +136,12 @@ class ApiClient {
       throw ApiException('API base URL is not configured');
     }
 
+    final uri = _uri(path, query);
     final http.Response res;
     try {
-      res = await _http.get(
-        _uri(path, query),
-        headers: {
-          'Accept': 'application/json',
-          'Accept-Language': lang,
-        },
-      ).timeout(const Duration(seconds: 20));
+      res = await _http
+          .get(uri, headers: _headers(extra: _sign('GET', uri, null)))
+          .timeout(const Duration(seconds: 20));
     } catch (e) {
       throw ApiException('Network error: $e');
     }
@@ -92,6 +161,119 @@ class ApiClient {
     }
 
     return body['data'];
+  }
+
+  /// Request-signing hook headers (no-op unless [ApiSecurityHooks.signRequest]
+  /// is installed). 6g supplies the signer; here it returns no extra headers.
+  Map<String, String> _sign(String method, Uri uri, String? body) =>
+      security.signRequest?.call(method, uri, body) ?? const {};
+
+  // -------------------------------------------------------------------------
+  // Phase 6f — RAW transport (no envelope unwrap). Used by the runtime/device/
+  // sync/analytics services that need status codes (304), or that POST.
+  // None of these throw on a non-2xx: they return the [RawResponse] so the
+  // caller decides (the runtime poll keeps its cache on 304; ingestion
+  // fire-and-forgets). A network error surfaces as statusCode 0.
+  // -------------------------------------------------------------------------
+
+  bool get hasBaseUrl => _base.isNotEmpty;
+
+  /// GET returning the raw status + decoded body + ETag, with optional
+  /// `If-None-Match`. The runtime config plane relies on the 304 path.
+  Future<RawResponse> getRaw(
+    String path, {
+    Map<String, String>? query,
+    String? ifNoneMatch,
+    bool retried = false,
+  }) async {
+    if (_base.isEmpty) return const RawResponse(0, null);
+    final uri = _uri(path, query);
+    try {
+      final res = await _http.get(
+        uri,
+        headers: _headers(extra: {
+          if (ifNoneMatch != null && ifNoneMatch.isNotEmpty) 'If-None-Match': ifNoneMatch,
+          ..._sign('GET', uri, null),
+        }),
+      ).timeout(const Duration(seconds: 20));
+      if (res.statusCode == 401 && !retried && await _tryRefresh()) {
+        return getRaw(path, query: query, ifNoneMatch: ifNoneMatch, retried: true);
+      }
+      final etag = res.headers['etag'];
+      if (res.statusCode == 304) return RawResponse(304, null, etag: etag ?? ifNoneMatch);
+      dynamic decoded;
+      if (res.body.isNotEmpty) {
+        try {
+          decoded = jsonDecode(res.body);
+        } catch (_) {/* leave null */}
+      }
+      return RawResponse(res.statusCode, decoded, etag: etag);
+    } catch (_) {
+      return const RawResponse(0, null);
+    }
+  }
+
+  /// Run the 401 handler at most once-per-call (re-entrancy guarded). Returns
+  /// true when a refresh succeeded and the caller should retry.
+  Future<bool> _tryRefresh() async {
+    final cb = onUnauthorized;
+    if (cb == null || _refreshing) return false;
+    _refreshing = true;
+    try {
+      return await cb();
+    } catch (_) {
+      return false;
+    } finally {
+      _refreshing = false;
+    }
+  }
+
+  /// POST a JSON body, returning the raw outcome (never throws).
+  Future<RawResponse> postJsonRaw(
+    String path,
+    Object? jsonBody, {
+    Map<String, String>? query,
+    bool retried = false,
+  }) async {
+    if (_base.isEmpty) return const RawResponse(0, null);
+    final uri = _uri(path, query);
+    final encoded = jsonBody == null ? null : jsonEncode(jsonBody);
+    try {
+      final res = await _http.post(
+        uri,
+        headers: _headers(extra: {
+          'Content-Type': 'application/json',
+          ..._sign('POST', uri, encoded),
+        }),
+        body: encoded,
+      ).timeout(const Duration(seconds: 20));
+      if (res.statusCode == 401 && !retried && await _tryRefresh()) {
+        return postJsonRaw(path, jsonBody, query: query, retried: true);
+      }
+      dynamic decoded;
+      if (res.body.isNotEmpty) {
+        try {
+          decoded = jsonDecode(res.body);
+        } catch (_) {/* leave null */}
+      }
+      return RawResponse(res.statusCode, decoded, etag: res.headers['etag']);
+    } catch (_) {
+      return const RawResponse(0, null);
+    }
+  }
+
+  /// POST a JSON body and unwrap the envelope `data` (throws like [_getData]).
+  Future<dynamic> postData(String path, Object? jsonBody, {Map<String, String>? query}) async {
+    final raw = await postJsonRaw(path, jsonBody, query: query);
+    if (raw.statusCode == 0) throw ApiException('Network error');
+    final body = raw.body;
+    final success = body is Map && body['success'] == true;
+    if (!raw.isOk || !success) {
+      final msg = (body is Map ? body['message'] as String? : null) ??
+          'Request failed (${raw.statusCode})';
+      throw ApiException(msg, statusCode: raw.statusCode);
+    }
+    return (body as Map)['data'];
   }
 
   /// Helper: unwrap a `PagedResult` envelope to its `items` list of maps.
