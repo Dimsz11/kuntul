@@ -69,6 +69,19 @@ dependencies:
   # no-op when the device has no biometrics enrolled.
   local_auth: ^2.3.0
 
+  # ── Phase 6g — Security/Session ─────────────────────────────────────────────
+  # HMAC-SHA256 + SHA-256 for request signing (SecurityService.signRequest) and
+  # the cert-pin SPKI hash. Pure Dart, no native code, Dart 3.5-safe → does not
+  # perturb the verified-green CI toolchain. Gated by flags.security.requestSigning,
+  # so when the flag is off (default) it is never exercised.
+  crypto: ^3.0.3
+
+  # NOTE — OAuth/OIDC login uses a documented MANUAL PKCE code flow (built on the
+  # existing `url_launcher` + `app_links` callback) so no new native config is
+  # required and the CI stays green. To use the native AppAuth flows instead, add
+  # `flutter_appauth: ^7.0.1` and route SecurityService.beginOidcLogin through it
+  # (see core/services/security_service.dart + flutter-runtime-wiring.md).
+
   # NOTE — Push / FCM is intentionally NOT a hard dependency. Firebase
   # Messaging needs native config (google-services.json /
   # GoogleService-Info.plist) that the CI does NOT provide, and the

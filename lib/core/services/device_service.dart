@@ -48,7 +48,11 @@ class DeviceService {
 
   /// Register (or refresh) the device. Call on launch and again whenever the
   /// push token changes. [locale] is the active UI language.
-  Future<void> register({
+  ///
+  /// Phase 6g: returns the unwrapped `data` map so the caller can pick up a
+  /// freshly-minted signing key (`signingKeyId` + `signingSecret`, shown ONCE) for
+  /// request signing. Null on a network/parse miss (fire-and-forget safe).
+  Future<Map<String, dynamic>?> register({
     required String deviceId,
     required String locale,
     String? pushToken,
@@ -81,7 +85,11 @@ class DeviceService {
       'userId': userId,
     };
 
-    await api.postJsonRaw('/api/devices/register', body);
+    final res = await api.postJsonRaw('/api/devices/register', body);
+    final data = res.body is Map && (res.body as Map)['data'] is Map
+        ? ((res.body as Map)['data'] as Map).map((k, v) => MapEntry(k.toString(), v))
+        : null;
+    return data;
   }
 
   /// FCM/APNs token refresh → re-register so the new token is stored.

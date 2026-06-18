@@ -196,6 +196,11 @@ class AuthService {
   }
 
   // ── secure-storage wrappers (never throw) ─────────────────────────────────────
+  // Phase 6g: exposed publicly so SecurityService can persist the device signing
+  // key (keyId + secret) in the same keychain/EncryptedSharedPrefs store.
+
+  Future<String?> secureRead(String key) => _secureRead(key);
+  Future<void> secureWrite(String key, String value) => _secureWrite(key, value);
 
   Future<String?> _secureRead(String key) async {
     try {

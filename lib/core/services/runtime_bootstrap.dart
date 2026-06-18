@@ -30,6 +30,7 @@ import 'deeplink_service.dart';
 import 'device_service.dart';
 import 'push_service.dart';
 import 'runtime_service.dart';
+import 'security_service.dart';
 import 'sync_service.dart';
 
 class RuntimeBootstrap with WidgetsBindingObserver {
@@ -44,6 +45,7 @@ class RuntimeBootstrap with WidgetsBindingObserver {
         _pushProvider = pushProvider {
     auth = AuthService(api: api, cache: this.cache);
     runtime = RuntimeService(api: api, cache: this.cache);
+    security = SecurityService(api: api, runtime: runtime, auth: auth);
     device = DeviceService(api: api);
     deepLinks = DeepLinkService(
       api: api,
@@ -82,6 +84,7 @@ class RuntimeBootstrap with WidgetsBindingObserver {
 
   late final AuthService auth;
   late final RuntimeService runtime;
+  late final SecurityService security;
   late final DeviceService device;
   late final DeepLinkService deepLinks;
   late final AnalyticsService analytics;
@@ -110,6 +113,11 @@ class RuntimeBootstrap with WidgetsBindingObserver {
       analytics.deviceIdOverride = deviceId;
       // 401 → refresh-or-anonymous (no-op unless 6g installs a refreshCallback).
       api.onUnauthorized = auth.handleUnauthorized;
+      // Phase 6g: load any persisted device signing key + install the signing hook
+      // on the shared client. The hook is inert until flags.security.requestSigning
+      // is on AND the path is signed, so this is a clean no-op by default.
+      await security.loadSigningKey();
+      security.installSigning();
     });
 
     // 2) Runtime config: hydrate from cache (offline-safe) → fetch envelope.
@@ -122,13 +130,20 @@ class RuntimeBootstrap with WidgetsBindingObserver {
     // 3) Device registration (token attached later by push, on refresh).
     await _guard(() async {
       final topics = _topicsFromConfig();
-      await device.register(
+      final regData = await device.register(
         deviceId: auth.deviceIdOrAnon,
         locale: localeProvider(),
         appBuildConfigId: config.buildConfigId,
         topics: topics,
         userId: auth.uid,
       );
+      // Phase 6g: a freshly-minted signing key (shown once) → persist it so request
+      // signing can sign once the flag is turned on. Re-registers omit the secret.
+      final newKeyId = regData?['signingKeyId']?.toString();
+      final newSecret = regData?['signingSecret']?.toString();
+      if (!security.hasSigningKey && (newKeyId?.isNotEmpty ?? false) && (newSecret?.isNotEmpty ?? false)) {
+        await security.setSigningKey(keyId: newKeyId!, secret: newSecret!);
+      }
       final hbSec = runtime.configInt('push.heartbeatSeconds') ?? 1800;
       device.startHeartbeat(locale: localeProvider(), interval: Duration(seconds: hbSec.clamp(60, 86400)));
     });
@@ -164,6 +179,15 @@ class RuntimeBootstrap with WidgetsBindingObserver {
         await sync.pullFavorites();
       }
     });
+
+    // 7) Device integrity / trust (Phase 6g). Report the (stub) signals + read the
+    //    trust verdict so the app can gate per flags.security.blockUntrusted. Pure
+    //    no-op effect by default (blockUntrusted off → blocked stays false); honest
+    //    (the server records "unverified" with no attestation key).
+    await _guard(() async {
+      await security.reportIntegrity();
+      if (security.blocked) onUntrusted?.call();
+    });
   }
 
   /// Re-run the cheap, resume-time work: refresh the runtime envelope (304-cheap),
@@ -177,6 +201,11 @@ class RuntimeBootstrap with WidgetsBindingObserver {
     await _guard(() => device.heartbeatNow(localeProvider()));
     await _guard(() => sync.onResume());
     await _guard(() => analytics.flush());
+    // Phase 6g: a cheap trust re-read on resume (gate may have changed server-side).
+    await _guard(() async {
+      await security.refreshTrust();
+      if (security.blocked) onUntrusted?.call();
+    });
   }
 
   /// Called when the runtime locale changes (so the next poll + registrations
@@ -192,6 +221,12 @@ class RuntimeBootstrap with WidgetsBindingObserver {
   /// Optional callback invoked when a refresh changed the envelope (so the host
   /// can re-apply the theme). Wired in main.dart.
   VoidCallback? onConfigChanged;
+
+  /// Phase 6g — optional callback invoked when the device trust gate fires (i.e.
+  /// flags.security.blockUntrusted is on AND the device's trust score is below the
+  /// threshold). The host can show a block/upgrade screen. Null = no gating UI
+  /// (the default, since blockUntrusted defaults off → this never fires).
+  VoidCallback? onUntrusted;
 
   // ── helpers ───────────────────────────────────────────────────────────────
 

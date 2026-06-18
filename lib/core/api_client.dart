@@ -64,9 +64,16 @@ class ApiClient {
   final AppConfig config;
   final http.Client _http;
 
-  /// Phase 6f — installed security hooks (signing + cert-pinning). Defaults to
+  /// Phase 6f/6g — installed security hooks (signing + cert-pinning). Defaults to
   /// no-ops, so behaviour is unchanged until 6g supplies real implementations.
-  final ApiSecurityHooks security;
+  ///
+  /// MUTABLE (6g): the request-signing seam is installed AFTER bootstrap (once the
+  /// runtime envelope's `flags.security.requestSigning` + the device signing key
+  /// are known) via [SecurityService.installSigning] → so it stays a no-op while
+  /// the flag is off (default). The cert-pinning client factory, by contrast, is
+  /// consulted once at construction (it builds [_http]); pass it at construction
+  /// (main.dart) when pins are baked/known — see [ApiSecurityHooks].
+  ApiSecurityHooks security;
 
   /// Language sent as the `lang` query param (and Accept-Language header) so
   /// the backend resolves titles/content for the active locale. Defaults to
